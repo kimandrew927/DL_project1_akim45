@@ -307,7 +307,7 @@ class MultiHeadSelfAttention(nn.Module):
         K = K.reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.reshape(B, T, self.num_heads, self.head_dim).transpose(1, 2)
         
-        scores = Q @ K.T * self.scale
+        scores = Q @ K.transpose(-2, -1) * self.scale
         attn_weights = F.softmax(scores, dim=-1)
         attn_weights = self.attn_drop(attn_weights)
         context = attn_weights @ V
@@ -371,23 +371,25 @@ class TransformerBlock(nn.Module):
         #     nn.Dropout(dropout)
         #     nn.Linear(mlp_dim, embed_dim)
         #     nn.Dropout(dropout)
-        raise NotImplementedError("TODO 1.3: implement TransformerBlock.__init__")
-
+        mlp = nn.Sequential(
+            nn.Linear(embed_dim, mlp_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_dim, embed_dim),
+            nn.Dropout(dropout)
+        )
+        self.mlp = mlp
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = MultiHeadSelfAttention(embed_dim, num_heads, dropout)
+        self.norm2 = nn.LayerNorm(embed_dim)
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # TODO 1.3 ── Implement the pre-norm residual block.
-        #
-        #   Step 1 (attention sub-layer):
-        #     normed      = self.norm1(x)
-        #     attn_out, attn_weights = self.attn(normed)
-        #     x           = x + attn_out
-        #
-        #   Step 2 (MLP sub-layer):
-        #     x           = x + self.mlp(self.norm2(x))
-        #
-        #   Return (x, attn_weights).
-        raise NotImplementedError("TODO 1.3: implement TransformerBlock.forward")
+        normed = self.norm1(x)
+        attn_out, attn_weights = self.attn(normed)
+        x = x + attn_out
+        x = x + self.mlp(self.norm2(x))
+        return x, attn_weights
 
 
 # ---------------------------------------------------------------------------
