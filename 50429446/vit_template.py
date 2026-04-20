@@ -486,13 +486,33 @@ class VisionTransformer(nn.Module):
         #   nn.Parameter so they are learnable).
         #
         #   blocks is an nn.ModuleList; create num_layers TransformerBlock instances.
-        raise NotImplementedError("TODO 1.4: implement VisionTransformer.__init__")
-
+        num_patches = (img_size // patch_size) ** 2
+        self.patch_embed = PatchEmbedding(img_size, patch_size, in_chans, embed_dim)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, num_heads, mlp_dim, dropout)
+            for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, num_classes)
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         # TODO 1.4 ── Follow the 9-step guide in the docstring.
-        raise NotImplementedError("TODO 1.4: implement VisionTransformer.forward")
+        B = x.shape[0]
+        x = self.patch_embed(x)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_tokens, x], dim=1)
+        x = x + self.pos_embed
+        attn_list = []
+        for block in self.blocks:
+            x, attn = block(x)
+            attn_list.append(attn)
+        x = self.norm(x)
+        cls_out = x[:, 0]
+        logits = self.head(cls_out)
+        return logits, attn_list
 
 
 # =============================================================================
@@ -581,7 +601,20 @@ def get_cifar10_subset(
     #   4. For each class 0-9, collect its indices in the training set,
     #      then randomly sample 500 of them.
     #   5. Return (Subset(train_dataset, selected_indices), test_dataset).
-    raise NotImplementedError("TODO 1.5: implement get_cifar10_subset")
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
+                             std =(0.2470, 0.2435, 0.2616))
+    ])
+    train_dataset = datasets.CIFAR10(root=data_root, train=True, download=True, transform=transform)
+    test_dataset = datasets.CIFAR10(root=data_root, train=False, download=True, transform=transform)
+    set_all_seeds(get_seed())
+    selected_indices = []
+    for i in range(10):
+        class_indices = [j for j in range(len(train_dataset)) if train_dataset[j][1] == i]
+        selected_indices.extend(random.sample(class_indices, 500))
+    train_subset = Subset(train_dataset, selected_indices)
+    return train_subset, test_dataset
 
 
 def train_model(
