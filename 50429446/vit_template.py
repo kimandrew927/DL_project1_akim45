@@ -695,7 +695,72 @@ def train_model(
     • Create checkpoint_dir if it doesn't exist: os.makedirs(..., exist_ok=True)
     """
     # TODO 1.6 ── Implement the training loop.
-    raise NotImplementedError("TODO 1.6: implement train_model")
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    train_loader = DataLoader(train_subset, batch_size=config["batch_size"], shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["epochs"])
+    history = []
+    for epoch in range(1, config["epochs"] + 1):
+        start_time = time.time()
+        model.train()
+        train_loss = 0.0
+        for images, labels in train_loader:
+            inputs, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            logits, _ = model(inputs)
+            loss = F.cross_entropy(logits, labels)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * inputs.size(0)
+        train_loss /= len(train_loader.dataset)
+        
+        model.eval()
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in test_loader:
+                inputs, labels = images.to(device), labels.to(device)
+                logits, _ = model(inputs)
+                _, predicted = torch.max(logits, dim=1)
+                correct += (predicted == labels).sum().item()
+                total += labels.size(0)
+        val_accuracy = correct / total
+
+        epoch_time_sec = time.time() - start_time
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f}, val_accuracy={val_accuracy:.4f}, epoch_time_sec={epoch_time_sec:.2f}")
+        history.append({
+            "epoch": epoch,
+            "train_loss": round(train_loss, 4),
+            "val_accuracy": round(val_accuracy, 4),
+            "epoch_time_sec": round(epoch_time_sec, 4),
+        })
+        scheduler.step()
+
+        if epoch in checkpoint_epochs:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "config":           model.config,
+                "epoch":            epoch,
+                "student_id":       STUDENT_ID,
+            }, f"{checkpoint_dir}/baseline_epoch_{epoch}.pt")
+    log = {
+        "student_id":         STUDENT_ID,
+        "seed":               get_seed(),
+        "config":             config,
+        "history":            history,
+        "final_val_accuracy": history[-1]["val_accuracy"],
+        "total_params":       total_params,
+    }
+    if log_path is not None:
+        _save_json(log, log_path)
+
+            
+    return log
 
 
 # =============================================================================
@@ -884,7 +949,36 @@ def compute_attention_entropy(
     • os.makedirs(os.path.dirname(output_path), exist_ok=True) before writing.
     """
     # TODO 3.1 -- Implement attention entropy computation.
-    raise NotImplementedError("TODO 3.1: implement compute_attention_entropy")
+    loaded_model = _load_baseline_checkpoint(checkpoint_path)
+    set_all_seeds(get_seed())
+    _, test_dataset = get_cifar10_subset()
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    
+    with torch.no_grad():
+        
+        
+        cls_attentions = {}  # use dict temporarily
+
+        for images, _ in test_loader:
+            logits, attn_list = loaded_model(images)
+            
+            for layer, attn in enumerate(attn_list):
+                cls_attn = attn[:, :, 0, :]
+                cls_attentions.setdefault(layer, []).append(cls_attn)
+                
+        num_layers = len(cls_attentions)        
+        result = {}
+        
+        for layer in range(num_layers):
+            mean_attn = torch.cat(cls_attentions[layer]).mean(dim=(0, 1))  # mean over B and h → (T,)
+            mean_attn = mean_attn.clamp(min=1e-9)
+            entropy = -(mean_attn * torch.log2(mean_attn)).sum().item()
+            result[f"layer_{layer}"] = round(entropy, 4)
+    
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    _save_json(result, output_path)
+    return result
 
 
 def compute_pos_embed_correlation(
