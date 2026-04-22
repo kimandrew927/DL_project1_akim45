@@ -1028,7 +1028,25 @@ def compute_pos_embed_correlation(
     • num_pairs = N * (N - 1) // 2
     """
     # TODO 3.2 -- Implement positional embedding correlation.
-    raise NotImplementedError("TODO 3.2: implement compute_pos_embed_correlation")
+    checkpoint = _load_baseline_checkpoint(checkpoint_path) 
+    position_embeddings = checkpoint.pos_embed[0, 1:, :]  
+    normed = F.normalize(position_embeddings, dim=-1)
+    cos_similarity = normed @ normed.T
+    N = position_embeddings.shape[0]
+    G = int(math.sqrt(N))
+    coords = torch.stack([torch.arange(N) // G, torch.arange(N) % G], dim=-1).float()
+    diff = coords[:, None, :] - coords[None, :, :]
+    euclidean_distance = diff.norm(dim=-1)
+    upper_tri_indices = torch.triu_indices(N, N, offset=1)
+    sim_vector = cos_similarity[upper_tri_indices[0], upper_tri_indices[1]].detach().cpu().numpy()
+
+    dist_vector = euclidean_distance[upper_tri_indices[0], upper_tri_indices[1]].cpu().numpy()
+    pearson_r = np.corrcoef(sim_vector, dist_vector)[0, 1]
+    result = {  "pearson_r": round(pearson_r, 4),
+                "num_pairs": N * (N - 1) // 2 }
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    _save_json(result, output_path)
+    return result
 
 
 def compute_per_class_accuracy(
@@ -1071,7 +1089,38 @@ def compute_per_class_accuracy(
       Diagonal entries are correct predictions; off-diagonal are confusions.
     """
     # TODO 3.3 -- Implement per-class accuracy and confusion analysis.
-    raise NotImplementedError("TODO 3.3: implement compute_per_class_accuracy")
+    model = _load_baseline_checkpoint(checkpoint_path)
+    _, test_dataset = get_cifar10_subset()
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+    all_true_labels = []
+    all_pred_labels = []
+    with torch.no_grad():
+        for images, labels in test_loader:
+            inputs, labels = images.to(device), labels.to(device)
+            logits, _ = model(inputs)
+            _, predicted = torch.max(logits, dim=1)
+            all_true_labels.append(labels.cpu())
+            all_pred_labels.append(predicted.cpu())
+    all_true_labels = torch.cat(all_true_labels)
+    all_pred_labels = torch.cat(all_pred_labels)
+    misclassifications = torch.zeros(10, 10, dtype=torch.long)
+    for true_label, pred_label in zip(all_true_labels, all_pred_labels):
+        misclassifications[true_label, pred_label] += 1
+    class_accuracies = {str(i): round(misclassifications[i, i].item() / misclassifications[i].sum().item(), 4) for i in range(10)}
+    true_labels, pred_labels = torch.nonzero(misclassifications - torch.diag(torch.diag(misclassifications)), as_tuple=False).T
+    counts = misclassifications[true_labels, pred_labels]
+    top3_indices = torch.argsort(counts, descending=True)[:3]
+    top3_confusions = [[true_labels[i].item(), pred_labels[i].item(),   counts[i].item()] for i in top3_indices]
+    result = {
+        "class_accuracies": class_accuracies,
+        "top3_confusions": top3_confusions,
+    }       
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    _save_json(result, output_path)
+    return result
 
 
 def compute_attention_distance(
