@@ -957,7 +957,7 @@ def compute_attention_entropy(
     with torch.no_grad():
         
         
-        cls_attentions = {}  # use dict temporarily
+        cls_attentions = {}
 
         for images, _ in test_loader:
             logits, attn_list = loaded_model(images)
@@ -970,7 +970,7 @@ def compute_attention_entropy(
         result = {}
         
         for layer in range(num_layers):
-            mean_attn = torch.cat(cls_attentions[layer]).mean(dim=(0, 1))  # mean over B and h → (T,)
+            mean_attn = torch.cat(cls_attentions[layer]).mean(dim=(0, 1)) 
             mean_attn = mean_attn.clamp(min=1e-9)
             entropy = -(mean_attn * torch.log2(mean_attn)).sum().item()
             result[f"layer_{layer}"] = round(entropy, 4)
@@ -1171,7 +1171,31 @@ def compute_attention_distance(
       Then .mean(dim=-1) → (B, h), then .mean() for the scalar.
     """
     # TODO 3.4 -- Implement mean attention distance computation.
-    raise NotImplementedError("TODO 3.4: implement compute_attention_distance")
+    model = _load_baseline_checkpoint(checkpoint_path)
+    _, test_dataset = get_cifar10_subset()
+    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    N = model.patch_embed.num_patches
+    G = int(math.sqrt(N))
+    coords = torch.stack([torch.arange(N) // G, torch.arange(N) % G], dim=-1).float()
+    diff = coords[:, None, :] - coords[None, :, :]
+    D_grid = diff.norm(dim=-1)
+    
+    layer_distances = {}  
+
+    with torch.no_grad():
+        for images, _ in test_loader:
+            logits, attn_list = model(images)
+            for l, attn in enumerate(attn_list):
+                A_patch = attn[:, :, 1:, 1:] 
+                A_patch = A_patch / A_patch.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+                mean_dist = (A_patch * D_grid).sum(dim=-1).mean(dim=-1).mean().item()
+                layer_distances.setdefault(l, []).append(mean_dist)
+
+    result = {f"layer_{l}": round(float(np.mean(distances)), 4) for l, distances in layer_distances.items()}
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    _save_json(result, output_path)
+    return result
 
 
 # =============================================================================
